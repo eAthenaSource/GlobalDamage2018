@@ -1,0 +1,460 @@
+diff --git a/conf/battle/misc.conf b/conf/battle/misc.conf
+index de64c0c45..045411b03 100644
+--- a/conf/battle/misc.conf
++++ b/conf/battle/misc.conf
+@@ -180,3 +180,32 @@ mail_delay: 1000
+ 
+ // Hides items from the player's favorite tab from being sold to a NPC. (Note 1)
+ hide_fav_sell: no
++
++// Global Damage Adjustment [Cydh]
++// These damage rates will be applied for all maps that have criteria in atk_adjustment_map (Note 2)
++atk_short_attack_damage_rate: 100
++atk_long_attack_damage_rate: 100
++atk_weapon_attack_damage_rate: 100
++atk_magic_attack_damage_rate: 100
++atk_misc_attack_damage_rate: 100
++
++// Which attacker that will get the damage output adjusted? (Note 3)
++// Default is 1 (Player)
++atk_damage_attacker: 1
++
++// In which type of the adjustments above will works?
++//    1 - Normal maps (not PVP, not GVG, not BG, not Restricted, not 'atk_rate' maps)
++//    2 - PVP (see above pk_*_attack_damage_rate)
++//    4 - GVG (see conf/battle/guild.conf gvg_*_attack_damage_rate)
++//    8 - Battlegrounds (see conf/battle/battleground.conf bg_*_attack_damage_rate)
++//   16 - 'atk_rate' mapflag (see conf/mapflag/atk_rate.txt)
++//   32 - zone 1
++//   64 - zone 2
++//  128 - zone 3
++//  256 - zone 4
++//  512 - zone 5
++// 1024 - zone 6
++// 2048 - zone 7
++// Example 4065 for all maps except PVP, GVG, and BG (have the adjustment already).
++// If 0 will disable this global rate, use 16 to only enable mapflag-based rates.
++atk_adjustment_map: 4065
+diff --git a/npc/mapflag/atk_rate.txt b/npc/mapflag/atk_rate.txt
+new file mode 100644
+index 000000000..b211445be
+--- /dev/null
++++ b/npc/mapflag/atk_rate.txt
+@@ -0,0 +1,19 @@
++//===== rAthena Script =======================================
++//= Mapflag: Damage Adjustment
++//===== By: ==================================================
++//= [Cydh] house.bad@gmail.com
++//===== Description: =========================================
++// <mapname>	mapflag	atk_rate	<AttackerType>,<ShortDamageRate>,<LongDamageRate>,<WeaponDamageRate>,<MagicDamageRate>,<MiscDamageRate>
++//
++// 'AttackerType' is bitmask value of
++//     1: Players
++//     2: Monsters
++//     4: Pets
++//     8: Homunculus
++//    16: Mercenaries
++//    32: Elementals
++// If only 'ShortDamageRate' that has the given value, the rest of rates will be same with its value.
++//============================================================
++// Example:
++//niflheim	mapflag	atk_rate	1,200,200,200,200,200	// All players damage will be 200%
++//nif_fild01	mapflag	atk_rate	1,70,80,60,75,120	// Short: 70%, Long: 80%, Physical Skill: 60%, Magic Skill: 75%, Misc: 120%
+diff --git a/npc/scripts_mapflags.conf b/npc/scripts_mapflags.conf
+index b50cb260c..169db1d3e 100644
+--- a/npc/scripts_mapflags.conf
++++ b/npc/scripts_mapflags.conf
+@@ -28,3 +28,4 @@ npc: npc/mapflag/battleground.txt
+ npc: npc/mapflag/skill_damage.txt
+ npc: npc/mapflag/town.txt
+ npc: npc/mapflag/nocostume.txt
++npc: npc/mapflag/atk_rate.txt
+diff --git a/src/map/atcommand.cpp b/src/map/atcommand.cpp
+index 314c6bbd2..efede33dd 100644
+--- a/src/map/atcommand.cpp
++++ b/src/map/atcommand.cpp
+@@ -3961,6 +3961,20 @@ ACMD_FUNC(partysharelvl) {
+ 	return 0;
+ }
+ 
++std::string atcommand_mapinfo_globaldamage_sub(int type) {
++	std::string atker = "";
++	size_t len = 0;
++
++	if (type&BL_PC)   atker.append("PC ");
++	if (type&BL_MOB)  atker.append("Monster ");
++	if (type&BL_PET)  atker.append("Pet ");
++	if (type&BL_HOM)  atker.append("Hom ");
++	if (type&BL_MER)  atker.append("Merc ");
++	if (type&BL_ELEM) atker.append("Elem ");
++
++	return atker;
++}
++
+ /*==========================================
+  * @mapinfo [0-3] <map name> by MC_Cameri
+  * => Shows information about the map [map name]
+@@ -4070,6 +4084,19 @@ ACMD_FUNC(mapinfo) {
+ 		}
+ 	}
+ 
++	//Global Damage adjustment. [Cydh]
++	if (map_getmapflag_sub(m_id, MF_ATK_RATE, NULL)) {
++		sprintf(atcmd_output,"Damage Adjustment for: %s", atcommand_mapinfo_globaldamage_sub(mapdata->atk_rate.rate[DMGRATE_BL]).c_str());
++		clif_displaymessage(fd,atcmd_output);
++		sprintf(atcmd_output," > Short: %d%% | Long: %d%% | Weapon: %d%% | Magic: %d%% | Misc: %d%%",
++			mapdata->atk_rate.rate[DMGRATE_SHORT],
++			mapdata->atk_rate.rate[DMGRATE_LONG],
++			mapdata->atk_rate.rate[DMGRATE_WEAPON],
++			mapdata->atk_rate.rate[DMGRATE_MAGIC],
++			mapdata->atk_rate.rate[DMGRATE_MISC]);
++		clif_displaymessage(fd,atcmd_output);
++	}
++
+ 	strcpy(atcmd_output,msg_txt(sd,1046)); // PvP Flags:
+ 	if (map_getmapflag(m_id, MF_PVP))
+ 		strcat(atcmd_output, " Pvp ON |");
+@@ -8167,6 +8194,7 @@ ACMD_FUNC(mapflag) {
+ 												MF_BEXP,
+ 												MF_JEXP,
+ 												MF_BATTLEGROUND,
++												MF_ATK_RATE,
+ 												MF_SKILL_DAMAGE };
+ 
+ 			if (flag && std::find(disabled_mf.begin(), disabled_mf.end(), mapflag) != disabled_mf.end()) {
+diff --git a/src/map/battle.cpp b/src/map/battle.cpp
+index 6368da40d..a638edef1 100644
+--- a/src/map/battle.cpp
++++ b/src/map/battle.cpp
+@@ -2252,6 +2252,70 @@ static int battle_skill_damage(struct block_list *src, struct block_list *target
+ 	return battle_skill_damage_skill(src, target, skill_id) + battle_skill_damage_map(src, target, skill_id);
+ }
+ 
++static inline int battle_calc_damage_adjustment_sub(struct s_global_damage_rate *rates, bool use_mapflag, int flag) {
++	if (flag&BF_SKILL) {
++		if (flag&BF_WEAPON)
++			return use_mapflag ? rates->rate[DMGRATE_WEAPON] : battle_config.atk_weapon_damage_rate;
++		if (flag&BF_MAGIC)
++			return use_mapflag ? rates->rate[DMGRATE_MAGIC] : battle_config.atk_magic_damage_rate;
++		if (flag&BF_MISC)
++			return use_mapflag ? rates->rate[DMGRATE_MISC] : battle_config.atk_misc_damage_rate;
++	}
++	else {
++		if (flag&BF_SHORT)
++			return use_mapflag ? rates->rate[DMGRATE_SHORT] : battle_config.atk_short_damage_rate;
++		if (flag&BF_LONG)
++			return use_mapflag ? rates->rate[DMGRATE_LONG] : battle_config.atk_long_damage_rate;
++	}
++	return 100;
++}
++
++/** Calculates Global Damage adjustments
++ * @author [Cydh]
++ * @param src block_list that will be checked
++ * @param bl enemy
++ * @param flag damage flag
++ * @param damage
++ **/
++static int64 battle_calc_damage_adjustment(struct block_list *src, int64 damage, int flag) {
++	unsigned int atk_maps = 0;
++	int rate = 100;
++	uint16 attacker = 0;
++	bool map_atk_rate, map_pvp, map_gvg, map_bg;
++	struct map_data *mapd;
++
++	nullpo_ret(src);
++
++	mapd = map_getmapdata(src->m);
++
++	if (!damage || !mapd)
++		return damage;
++
++	map_atk_rate = mapd->flag[MF_ATK_RATE] > 0;
++	attacker = map_atk_rate ? mapd->atk_rate.rate[DMGRATE_BL] : battle_config.atk_damage_attacker;
++
++	// Wrong attacker
++	if (!(attacker&src->type))
++		return damage;
++
++	atk_maps = battle_config.atk_adjustment_map;
++	map_pvp = map_flag_vs(src->m);
++	map_gvg = map_flag_gvg2(src->m);
++	map_bg = mapd->flag[MF_BATTLEGROUND] > 0;
++
++	//Checking mapflag
++	if ((atk_maps & 1 && (!map_pvp && !map_gvg && !map_bg && !map_atk_rate && !mapd->zone)) ||
++		(atk_maps & 2 && map_pvp) ||
++		(atk_maps & 4 && map_gvg) ||
++		(atk_maps & 8 && map_bg) ||
++		(atk_maps & 16 && map_atk_rate) ||
++		(mapd->zone && atk_maps & (8 * mapd->zone)))
++	{
++		rate = battle_calc_damage_adjustment_sub(&mapd->atk_rate, map_atk_rate, flag);
++	}
++	return apply_rate(damage, rate);
++}
++
+ /**
+  * Calculates Minstrel/Wanderer bonus for Chorus skills.
+  * @param sd: Player who has Chorus skill active
+@@ -5073,6 +5137,8 @@ struct Damage battle_calc_attack_gvg_bg(struct Damage wd, struct block_list *src
+ 				wd.damage=battle_calc_gvg_damage(src,target,wd.damage,skill_id,wd.flag);
+ 			else if( mapdata->flag[MF_BATTLEGROUND] )
+ 				wd.damage=battle_calc_bg_damage(src,target,wd.damage,skill_id,wd.flag);
++			if (battle_config.atk_adjustment_map)
++				wd.damage = battle_calc_damage_adjustment(src, wd.damage, wd.flag); // Global damage adjustment [Cydh]
+ 		}
+ 		else if(!wd.damage) {
+ 			wd.damage2 = battle_calc_damage(src,target,&wd,wd.damage2,skill_id,skill_lv);
+@@ -5080,6 +5146,8 @@ struct Damage battle_calc_attack_gvg_bg(struct Damage wd, struct block_list *src
+ 				wd.damage2 = battle_calc_gvg_damage(src,target,wd.damage2,skill_id,wd.flag);
+ 			else if( mapdata->flag[MF_BATTLEGROUND] )
+ 				wd.damage2 = battle_calc_bg_damage(src,target,wd.damage2,skill_id,wd.flag);
++			if (battle_config.atk_adjustment_map)
++				wd.damage2 = battle_calc_damage_adjustment(src, wd.damage2, wd.flag); // Global damage adjustment [Cydh]
+ 		}
+ 		else {
+ 			int64 d1 = wd.damage + wd.damage2,d2 = wd.damage2;
+@@ -5088,6 +5156,8 @@ struct Damage battle_calc_attack_gvg_bg(struct Damage wd, struct block_list *src
+ 				wd.damage = battle_calc_gvg_damage(src,target,wd.damage,skill_id,wd.flag);
+ 			else if( mapdata->flag[MF_BATTLEGROUND] )
+ 				wd.damage = battle_calc_bg_damage(src,target,wd.damage,skill_id,wd.flag);
++			if (battle_config.atk_adjustment_map)
++				wd.damage = battle_calc_damage_adjustment(src, wd.damage, wd.flag); // Global damage adjustment [Cydh]
+ 			wd.damage2 = (int64)d2*100/d1 * wd.damage/100;
+ 			if(wd.damage > 1 && wd.damage2 < 1) wd.damage2 = 1;
+ 			wd.damage-=wd.damage2;
+@@ -6406,6 +6476,9 @@ struct Damage battle_calc_magic_attack(struct block_list *src,struct block_list
+ 	else if (mapdata->flag[MF_BATTLEGROUND])
+ 		ad.damage = battle_calc_bg_damage(src,target,ad.damage,skill_id,ad.flag);
+ 
++	if (battle_config.atk_adjustment_map)
++		ad.damage = battle_calc_damage_adjustment(src, ad.damage, ad.flag); // Global damage adjustment [Cydh]
++
+ 	// Skill damage adjustment
+ 	if ((skill_damage = battle_skill_damage(src,target,skill_id)) != 0)
+ 		MATK_ADDRATE(skill_damage);
+@@ -6800,6 +6873,9 @@ struct Damage battle_calc_misc_attack(struct block_list *src,struct block_list *
+ 	else if(mapdata->flag[MF_BATTLEGROUND])
+ 		md.damage = battle_calc_bg_damage(src,target,md.damage,skill_id,md.flag);
+ 
++	if (battle_config.atk_adjustment_map)
++		md.damage = battle_calc_damage_adjustment(src, md.damage, md.flag); // Global damage adjustment [Cydh]
++
+ 	// Skill damage adjustment
+ 	if ((skill_damage = battle_skill_damage(src,target,skill_id)) != 0)
+ 		md.damage += (int64)md.damage * skill_damage / 100;
+@@ -8387,6 +8463,14 @@ static const struct _battle_data {
+ 	{ "cashshop_show_points",               &battle_config.cashshop_show_points,            0,      0,      1,              },
+ 	{ "mail_show_status",                   &battle_config.mail_show_status,                0,      0,      2,              },
+ 	{ "client_limit_unit_lv",               &battle_config.client_limit_unit_lv,            0,      0,      BL_ALL,         },
++	// Global Damage adjustment. [Cydh]
++	{ "atk_adjustment_map",                 &battle_config.atk_adjustment_map,              4082,   0,      4095,           },
++	{ "atk_damage_attacker",                &battle_config.atk_damage_attacker,             BL_PC,  BL_PC,  BL_ALL,         },
++	{ "atk_short_attack_damage_rate",       &battle_config.atk_short_damage_rate,           100,    1,      UINT16_MAX,     },
++	{ "atk_long_attack_damage_rate",        &battle_config.atk_long_damage_rate,            100,    1,      UINT16_MAX,     },
++	{ "atk_weapon_attack_damage_rate",      &battle_config.atk_weapon_damage_rate,          100,    1,      UINT16_MAX,     },
++	{ "atk_magic_attack_damage_rate",       &battle_config.atk_magic_damage_rate,           100,    1,      UINT16_MAX,     },
++	{ "atk_misc_attack_damage_rate",        &battle_config.atk_misc_damage_rate,            100,    1,      UINT16_MAX,     },
+ // BattleGround Settings
+ 	{ "bg_update_interval",                 &battle_config.bg_update_interval,              1000,   100,    INT_MAX,        },
+ 	{ "bg_short_attack_damage_rate",        &battle_config.bg_short_damage_rate,            80,     0,      INT_MAX,        },
+diff --git a/src/map/battle.hpp b/src/map/battle.hpp
+index d89de0e90..8c89bf26a 100644
+--- a/src/map/battle.hpp
++++ b/src/map/battle.hpp
+@@ -515,6 +515,15 @@ struct Battle_Config
+ 	int bg_misc_damage_rate;
+ 	int bg_flee_penalty;
+ 
++	// Global Damage adjustment. [Cydh]
++	int atk_adjustment_map;
++	int atk_damage_attacker;
++	int atk_short_damage_rate;
++	int atk_long_damage_rate;
++	int atk_weapon_damage_rate;
++	int atk_magic_damage_rate;
++	int atk_misc_damage_rate;
++
+ 	// rAthena
+ 	int max_third_parameter;
+ 	int max_baby_third_parameter;
+diff --git a/src/map/map.cpp b/src/map/map.cpp
+index 3baa0aa80..adf906cd8 100644
+--- a/src/map/map.cpp
++++ b/src/map/map.cpp
+@@ -3558,6 +3558,14 @@ void map_flags_init(void){
+ 		// skill damage
+ 		mapdata->damage_adjust = {};
+ 
++		mapdata->atk_rate = {}; //Global Damage Adjustment [Cydh]
++		mapdata->atk_rate.rate[DMGRATE_BL] = BL_ALL;
++		mapdata->atk_rate.rate[DMGRATE_WEAPON] = 100;
++		mapdata->atk_rate.rate[DMGRATE_LONG] = 100;
++		mapdata->atk_rate.rate[DMGRATE_WEAPON] = 100;
++		mapdata->atk_rate.rate[DMGRATE_MAGIC] = 100;
++		mapdata->atk_rate.rate[DMGRATE_MISC] = 100;
++
+ 		// adjustments
+ 		if( battle_config.pk_mode && !mapdata->flag[MF_PVP] )
+ 			mapdata->flag[MF_PVP] = true; // make all maps pvp for pk_mode [Valaris]
+@@ -4779,6 +4787,21 @@ bool map_setmapflag_sub(int16 m, enum e_mapflag mapflag, bool status, union u_ma
+ 			}
+ 			mapdata->flag[mapflag] = status;
+ 			break;
++		case MF_ATK_RATE:
++			if (!status)
++				mapdata->atk_rate = {};
++			else {
++				nullpo_retr(false, args);
++
++				if (!args->atk_rate.rate[DMGRATE_BL]) {
++					ShowError("map_setmapflag: atk_rate without attacker type for map %s.\n", mapdata->name);
++					return false;
++				}
++
++				memcpy(&mapdata->atk_rate, &args->atk_rate, sizeof(struct s_global_damage_rate));
++			}
++			mapdata->flag[mapflag] = status;
++			break;
+ 		default:
+ 			mapdata->flag[mapflag] = status;
+ 			break;
+diff --git a/src/map/map.hpp b/src/map/map.hpp
+index 5200ff6b4..03ec3613c 100644
+--- a/src/map/map.hpp
++++ b/src/map/map.hpp
+@@ -574,6 +574,7 @@ enum e_mapflag : int16 {
+ 	MF_NOEXP,
+ 	MF_PRIVATEAIRSHIP_SOURCE,
+ 	MF_PRIVATEAIRSHIP_DESTINATION,
++	MF_ATK_RATE,
+ 	MF_MAX
+ };
+ 
+@@ -609,11 +610,28 @@ struct s_drop_list {
+ 	enum e_nightmare_drop_type drop_type;
+ };
+ 
++/// Enum of global damage types [Cydh]
++enum e_global_damage_rate_type : uint8 {
++	DMGRATE_BL,
++	DMGRATE_SHORT,
++	DMGRATE_LONG,
++	DMGRATE_WEAPON,
++	DMGRATE_MAGIC,
++	DMGRATE_MISC,
++	DMGRATE_MAX,
++};
++
++// Map-based damage rate [Cydh]
++struct s_global_damage_rate {
++	int rate[DMGRATE_MAX];
++};
++
+ /// Union for mapflag values
+ union u_mapflag_args {
+ 	struct point nosave;
+ 	struct s_drop_list nightmaredrop;
+ 	struct s_skill_damage skill_damage;
++	struct s_global_damage_rate atk_rate;
+ 	int flag_val;
+ };
+ 
+@@ -726,6 +744,7 @@ struct map_data {
+ 	uint32 zone; // zone number (for item/skill restrictions)
+ 	struct s_skill_damage damage_adjust; // Used for overall skill damage adjustment
+ 	std::vector<s_skill_damage> skill_damage; // Used for single skill damage adjustment
++	struct s_global_damage_rate atk_rate; // Global Damage [Cydh]
+ 
+ 	struct npc_data *npc[MAX_NPC_PER_MAP];
+ 	struct spawn_data *moblist[MAX_MOB_LIST_PER_MAP]; // [Wizputer]
+diff --git a/src/map/npc.cpp b/src/map/npc.cpp
+index 2dfb55e18..f2eb1acad 100644
+--- a/src/map/npc.cpp
++++ b/src/map/npc.cpp
+@@ -4118,6 +4118,26 @@ static const char* npc_parse_mapflag(char* w1, char* w2, char* w3, char* w4, con
+ 			break;
+ 		}
+ 
++		case MF_ATK_RATE: {
++			union u_mapflag_args args = {};
++
++			if (!state)
++				map_setmapflag_sub(m, MF_ATK_RATE, false, &args);
++			else {
++				if (sscanf(w4, "%d,%d,%d,%d,%d,%d",
++					&args.atk_rate.rate[DMGRATE_BL], &args.atk_rate.rate[DMGRATE_SHORT], &args.atk_rate.rate[DMGRATE_LONG],
++					&args.atk_rate.rate[DMGRATE_WEAPON], &args.atk_rate.rate[DMGRATE_MAGIC], &args.atk_rate.rate[DMGRATE_MISC]
++				) == 6)
++				{
++					map_setmapflag_sub(m, MF_ATK_RATE, true, &args);
++				}
++				else {
++					ShowInfo("npc_parse_mapflag: atk_rate: Not sufficient values (file '%s', line '%d'). Skipping..\n", filepath, strline(buffer, start - buffer));
++				}
++			}
++			break;
++		}
++
+ 		// All others do not need special treatment
+ 		default:
+ 			map_setmapflag(m, mapflag, state);
+diff --git a/src/map/script.cpp b/src/map/script.cpp
+index 21dd200c4..a963e4b73 100644
+--- a/src/map/script.cpp
++++ b/src/map/script.cpp
+@@ -12267,8 +12267,16 @@ BUILDIN_FUNC(getmapflag)
+ 
+ 	union u_mapflag_args args = {};
+ 
+-	if (mf == MF_SKILL_DAMAGE && !script_hasdata(st, 4))
+-		args.flag_val = SKILLDMG_MAX;
++	if (!script_hasdata(st, 4)) {
++		switch (mf) {
++			case MF_SKILL_DAMAGE:
++				args.flag_val = SKILLDMG_MAX;
++				break;
++			case MF_ATK_RATE:
++				args.flag_val = SKILLDMG_MAX;
++				break;
++		}
++	}
+ 	else
+ 		FETCH(4, args.flag_val);
+ 
+@@ -12319,6 +12327,14 @@ BUILDIN_FUNC(setmapflag)
+ 			args.nightmaredrop.drop_per = 300;
+ 			args.nightmaredrop.drop_type = NMDT_EQUIP;
+ 			break;
++		case MF_ATK_RATE:
++			if (script_hasdata(st, 4) && script_hasdata(st, 5))
++				args.atk_rate.rate[script_getnum(st, 5)] = script_getnum(st, 4);
++			else {
++				ShowWarning("buildin_setmapflag: Unable to set atk_rate mapflag as flag data is missing.\n");
++				return SCRIPT_CMD_FAILURE;
++			}
++			break;
+ 		default:
+ 			FETCH(4, args.flag_val);
+ 			break;
+diff --git a/src/map/script_constants.hpp b/src/map/script_constants.hpp
+index 396f31e62..cba8d9195 100644
+--- a/src/map/script_constants.hpp
++++ b/src/map/script_constants.hpp
+@@ -7303,6 +7303,15 @@
+ 	export_constant(SKILLDMG_MAX);
+ 	export_constant(SKILLDMG_CASTER);
+ 
++	// Global Damage [Cydh]
++	export_constant(MF_ATK_RATE);
++	export_constant(DMGRATE_BL);
++	export_constant(DMGRATE_SHORT);
++	export_constant(DMGRATE_LONG);
++	export_constant(DMGRATE_WEAPON);
++	export_constant(DMGRATE_MAGIC);
++	export_constant(DMGRATE_MISC);
++
+ 	#undef export_constant
+ 	#undef export_constant2
+ 	#undef export_parameter
